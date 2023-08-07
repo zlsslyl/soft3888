@@ -539,7 +539,7 @@ def main():
 
     # optionally resume from a checkpoint
     resume_epoch = None
-    if args.resume:
+    if args.resume and os.path.isfile(args.resume):
         resume_epoch = resume_checkpoint(
             model,
             args.resume,

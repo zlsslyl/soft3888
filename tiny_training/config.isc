@@ -1,6 +1,6 @@
-experiment_name="tiny_training"
-gpu_type="24GB VRAM GPU"
+experiment_name = "tiny_training_cycle"
+gpu_type = "24GB VRAM GPU"
 nnodes = 3
-venv_path = "~/.venv/bin/activate"
-output_path = "~/output_tiny"
-command = "train.py"
+venv_path = "/home/chris/.venv/bin/activate"
+output_path = "~/output_tiny_training_cycle"
+command = "train_cycle.py --max-steps 4000000 --checkpoint-path $OUTPUT_PATH/tiny_checkpoint.pt"

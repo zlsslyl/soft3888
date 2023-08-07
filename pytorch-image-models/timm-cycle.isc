@@ -1,0 +1,6 @@
+experiment_name = "timm-cycle"
+gpu_type = "24GB VRAM GPU"
+nnodes = 6
+venv_path = "/home/chris/.venv/bin/activate"
+output_path = "~/output-timm-cycle"
+command = "train.py /workspace/datasets/imagenet/ILSVRC/Data/CLS-LOC --amp --resume $OUTPUT_PATH/checkpoint.pt"
