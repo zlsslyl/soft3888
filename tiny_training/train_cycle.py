@@ -5,6 +5,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import time
 import json
+import os
+from tempfile import NamedTemporaryFile
+from contextlib import contextmanager
 
 def is_master(global_rank):
     return global_rank == 0
@@ -18,6 +21,18 @@ def load_checkpoint(*, path, model, optimizer, device):
     print(f"Loaded checkpoint from {path}. step = {step}")
     return step
 
+@contextmanager
+def FaultTolerantFile(name):
+    dirpath, filename = os.path.split(name)
+    # use the same dir for os.rename() to work
+    with NamedTemporaryFile(dir=dirpath, prefix=filename, suffix='.tmp', delete=False) as f:
+        yield f
+        f.flush() 
+        os.fsync(f)
+        f.delete = False # don't delete tmp file if `replace()` fails
+        f.close()
+        os.replace(f.name, name)
+
 def save_checkpoint(*, path, model, optimizer, step):
     print(f"Saving checkpoint to {path}. step = {step}")
     checkpoint = {
@@ -25,7 +40,9 @@ def save_checkpoint(*, path, model, optimizer, step):
         "optimizer": optimizer.state_dict(),
         "step": step,
     }
-    torch.save(checkpoint, path)
+    with FaultTolerantFile(path) as f:
+        torch.save(checkpoint, f.name)
+
 
 def main(args):
     checkpoint_path = args.checkpoint_path
@@ -68,7 +85,7 @@ def main(args):
         loss = model(batch).sum()
         loss.backward()
         optimizer.step()
-        if is_master(global_rank) and i % 10 == 0:
+        if is_master(global_rank) and i % 50 == 0:
             save_checkpoint(path=checkpoint_path, model=model.module, optimizer=optimizer, step=i)
             print(f"Rank {global_rank} completed step {i}. loss = {loss.item()}")
     end_time = time.perf_counter()
