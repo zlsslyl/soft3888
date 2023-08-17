@@ -1,66 +1,87 @@
 import argparse
 from pathlib import Path
 import torch
-import torchvision
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import time
-import json
 import signal
-import enum
+import torchvision
+import atexit
 
 def is_master(global_rank):
     return global_rank == 0
 
-def save_checkpoint(path, step):
+def save_checkpoint(*, path, model, optimizer, step):
     print("Saving checkpoint")
-    torch.save({"step": step}, path)
+    torch.save({
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "step": step,
+    }, path)
 
-def load_checkpoint(path) -> int:
+def load_checkpoint(*, path, model, optimizer, device) -> int:
     print("loading checkpoint")
-    checkpoint = torch.load(path)
+    checkpoint = torch.load(path, map_location=device)
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
     return checkpoint["step"]
 
-is_at_cycle_end = False
+done = False
+ 
 
-def cycle_end_signal_handler(signum, frame):
-    print("HANDLING SIGNAL!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1")
-    global is_at_cycle_end
-    is_at_cycle_end = True
-
-signal.signal(signal.SIGINT, cycle_end_signal_handler)
-signal.signal(signal.SIGTERM, cycle_end_signal_handler)
-
-class BreakReason(enum.Enum):
-    STEPS_COMPLETED = 1
-    CYCLE_END = 2
+def shandler(signum, frame):
+    print("setting self.done=True")
+    global done
+    done = True
+signal.signal(signal.SIGINT, shandler)
+signal.signal(signal.SIGTERM, shandler)
 
 def main(args):
     checkpoint_path = args.checkpoint_path
+    print(f"Checkpoint Path: {checkpoint_path}")
     max_steps = args.max_steps
 
     dist.init_process_group("nccl")
     global_rank = dist.get_rank()
     device_id = global_rank % torch.cuda.device_count()
+    print(f"Global Rank: {global_rank}, Device Count {torch.cuda.device_count()}, Device ID: {device_id}")
     world_size = dist.get_world_size()
     torch.cuda.set_device(device_id)
 
+    model = torchvision.models.resnet18().to(device_id)
+    optimizer = torch.optim.SGD(model.parameters(), lr=3e-4)
+
     starting_step = 0
     if checkpoint_path.exists():
-        starting_step = load_checkpoint(checkpoint_path)
+        starting_step = load_checkpoint(path=checkpoint_path, model=model, optimizer=optimizer, device=f"cuda:{device_id}")
     if starting_step >= max_steps:
         return
 
-    for i in range(starting_step, max_steps):
-        print(f"Step {i} of {max_steps}")
-        time.sleep(1) # doing work
+    model = DDP(model, device_ids=[device_id])
+    batch = torch.randn(64, 3, 224, 224).to(device_id)
 
-        if is_at_cycle_end:
+    atexit.register(lambda: save_checkpoint(path=checkpoint_path, model=model.module, optimizer=optimizer, step=i))
+
+    if done:
+        raise Exception("Cycle Finished: Did not setup fast enough")
+    for i in range(starting_step, max_steps):
+        if is_master(global_rank):
+            print(f"Step {i} of {max_steps}")
+
+        optimizer.zero_grad()
+        loss = model(batch).sum()
+        loss.backward()
+        optimizer.step()
+
+        if done:
+            print(f"Step {i} of {max_steps} was interrupted")
             break
 
     if is_master(global_rank):
-        save_checkpoint(checkpoint_path, i)
+        save_checkpoint(path=checkpoint_path, model=model.module, optimizer=optimizer, step=i)
         print("Training Complete")
+
+    dist.barrier()
     dist.destroy_process_group()
 
 
