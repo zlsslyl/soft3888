@@ -383,6 +383,7 @@ class VisionTransformer(nn.Module):
     A PyTorch impl of : `An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale`
         - https://arxiv.org/abs/2010.11929
     """
+    dynamic_img_size: Final[bool]
 
     def __init__(
             self,
@@ -402,6 +403,8 @@ class VisionTransformer(nn.Module):
             no_embed_class: bool = False,
             pre_norm: bool = False,
             fc_norm: Optional[bool] = None,
+            dynamic_img_size: bool = False,
+            dynamic_img_pad: bool = False,
             drop_rate: float = 0.,
             pos_drop_rate: float = 0.,
             patch_drop_rate: float = 0.,
@@ -452,14 +455,21 @@ class VisionTransformer(nn.Module):
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.num_prefix_tokens = 1 if class_token else 0
         self.no_embed_class = no_embed_class
+        self.dynamic_img_size = dynamic_img_size
         self.grad_checkpointing = False
 
+        embed_args = {}
+        if dynamic_img_size:
+            # flatten deferred until after pos embed
+            embed_args.update(dict(strict_img_size=False, output_fmt='NHWC'))
         self.patch_embed = embed_layer(
             img_size=img_size,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
             bias=not pre_norm,  # disable bias if pre-norm is used (e.g. CLIP)
+            dynamic_img_pad=dynamic_img_pad,
+            **embed_args,
         )
         num_patches = self.patch_embed.num_patches
 
@@ -546,10 +556,20 @@ class VisionTransformer(nn.Module):
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
     def _pos_embed(self, x):
+        if self.dynamic_img_size:
+            B, H, W, C = x.shape
+            pos_embed = resample_abs_pos_embed(
+                self.pos_embed,
+                (H, W),
+                num_prefix_tokens=0 if self.no_embed_class else self.num_prefix_tokens,
+            )
+            x = x.view(B, -1, C)
+        else:
+            pos_embed = self.pos_embed
         if self.no_embed_class:
             # deit-3, updated JAX (big vision)
             # position embedding does not overlap with class token, add then concat
-            x = x + self.pos_embed
+            x = x + pos_embed
             if self.cls_token is not None:
                 x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
         else:
@@ -557,7 +577,7 @@ class VisionTransformer(nn.Module):
             # pos_embed has entry for class token, concat then add
             if self.cls_token is not None:
                 x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
-            x = x + self.pos_embed
+            x = x + pos_embed
         return self.pos_drop(x)
 
     def _intermediate_layers(
@@ -1466,6 +1486,7 @@ default_cfgs = generate_default_cfgs({
         url='https://dl.fbaipublicfiles.com/ijepa/IN1K-vit.h.16-448px-300e.pth.tar',
         # hf_hub_id='timm/',
         license='cc-by-nc-4.0',
+        input_size=(3, 448, 448), crop_pct=1.0,
         mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD, num_classes=0),
     'vit_gigantic_patch16_224_ijepa.in22k': _cfg(
         url='https://dl.fbaipublicfiles.com/ijepa/IN22K-vit.g.16-600e.pth.tar',
@@ -2066,21 +2087,27 @@ def vit_giant_patch14_dinov2(pretrained=False, **kwargs) -> VisionTransformer:
         'vit_giant_patch14_dinov2', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
 
+
 @register_model
 def vit_huge_patch14_224_ijepa(pretrained=False, **kwargs) -> VisionTransformer:
     """ ViT-Huge model (ViT-H/14) from `I-JEPA` - https://arxiv.org/abs/2301.08243
     """
     model_args = dict(patch_size=14, embed_dim=1280, depth=32, num_heads=16, class_token=False, global_pool='avg')
-    model = _create_vision_transformer('vit_huge_patch14_224_ijepa', pretrained=pretrained, **dict(model_args, **kwargs))
+    model = _create_vision_transformer(
+        'vit_huge_patch14_224_ijepa', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
+
 
 @register_model
 def vit_huge_patch16_448_ijepa(pretrained=False, **kwargs) -> VisionTransformer:
     """ ViT-Huge model (ViT-H/16) from `I-JEPA` - https://arxiv.org/abs/2301.08243
     """
-    model_args = dict(patch_size=16, embed_dim=1280, depth=32, num_heads=16, class_token=False, global_pool='avg', img_size=448)
-    model = _create_vision_transformer('vit_huge_patch16_448_ijepa', pretrained=pretrained, **dict(model_args, **kwargs))
+    model_args = dict(
+        patch_size=16, embed_dim=1280, depth=32, num_heads=16, class_token=False, global_pool='avg', img_size=448)
+    model = _create_vision_transformer(
+        'vit_huge_patch16_448_ijepa', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
+
 
 @register_model
 def vit_gigantic_patch16_224_ijepa(pretrained=False, **kwargs) -> VisionTransformer:
@@ -2090,6 +2117,7 @@ def vit_gigantic_patch16_224_ijepa(pretrained=False, **kwargs) -> VisionTransfor
     model = _create_vision_transformer(
         'vit_gigantic_patch16_224_ijepa', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
+
 
 register_model_deprecations(__name__, {
     'vit_tiny_patch16_224_in21k': 'vit_tiny_patch16_224.augreg_in21k',

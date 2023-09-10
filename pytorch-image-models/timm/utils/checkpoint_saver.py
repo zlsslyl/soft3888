@@ -12,7 +12,6 @@ import logging
 
 import torch
 
-from cycling_utils import atomic_torch_save
 from .model import unwrap_model, get_state_dict
 
 
@@ -24,7 +23,6 @@ class CheckpointSaver:
             self,
             model,
             optimizer,
-            sampler,
             args=None,
             model_ema=None,
             amp_scaler=None,
@@ -39,7 +37,6 @@ class CheckpointSaver:
         # objects to save state_dicts of
         self.model = model
         self.optimizer = optimizer
-        self.sampler = sampler
         self.args = args
         self.model_ema = model_ema
         self.amp_scaler = amp_scaler
@@ -116,9 +113,7 @@ class CheckpointSaver:
             save_state['state_dict_ema'] = get_state_dict(self.model_ema, self.unwrap_fn)
         if metric is not None:
             save_state['metric'] = metric
-        if self.sampler is not None:
-            save_state['sampler'] = self.sampler.state_dict()
-        atomic_torch_save(save_state, save_path)
+        torch.save(save_state, save_path)
 
     def _cleanup_checkpoints(self, trim=0):
         trim = min(len(self.checkpoint_files), trim)

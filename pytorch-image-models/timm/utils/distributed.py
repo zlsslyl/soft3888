@@ -77,26 +77,75 @@ def world_info_from_env():
     return local_rank, global_rank, world_size
 
 
+# def init_distributed_device(args):
+#     # Distributed training = training on more than one GPU.
+#     # Works in both single and multi-node scenarios.
+#     args.distributed = False
+#     args.world_size = 1
+#     args.rank = 0  # global rank
+#     args.local_rank = 0
+
+#     # TBD, support horovod?
+#     # if args.horovod:
+#     #     assert hvd is not None, "Horovod is not installed"
+#     #     hvd.init()
+#     #     args.local_rank = int(hvd.local_rank())
+#     #     args.rank = hvd.rank()
+#     #     args.world_size = hvd.size()
+#     #     args.distributed = True
+#     #     os.environ['LOCAL_RANK'] = str(args.local_rank)
+#     #     os.environ['RANK'] = str(args.rank)
+#     #     os.environ['WORLD_SIZE'] = str(args.world_size)
+#     dist_backend = getattr(args, 'dist_backend', 'nccl')
+#     dist_url = getattr(args, 'dist_url', 'env://')
+#     if is_distributed_env():
+#         if 'SLURM_PROCID' in os.environ:
+#             # DDP via SLURM
+#             args.local_rank, args.rank, args.world_size = world_info_from_env()
+#             # SLURM var -> torch.distributed vars in case needed
+#             os.environ['LOCAL_RANK'] = str(args.local_rank)
+#             os.environ['RANK'] = str(args.rank)
+#             os.environ['WORLD_SIZE'] = str(args.world_size)
+#             torch.distributed.init_process_group(
+#                 backend=dist_backend,
+#                 init_method=dist_url,
+#                 world_size=args.world_size,
+#                 rank=args.rank,
+#             )
+#         else:
+#             # DDP via torchrun, torch.distributed.launch
+#             args.local_rank, _, _ = world_info_from_env()
+#             torch.distributed.init_process_group(
+#                 backend=dist_backend,
+#                 init_method=dist_url,
+#             )
+#             args.world_size = torch.distributed.get_world_size()
+#             args.rank = torch.distributed.get_rank()
+#         args.distributed = True
+
+#     if torch.cuda.is_available():
+#         if args.distributed:
+#             device = 'cuda:%d' % args.local_rank
+#         else:
+#             device = 'cuda:0'
+#         torch.cuda.set_device(device)
+#     else:
+#         device = 'cpu'
+
+#     args.device = device
+#     device = torch.device(device)
+#     return device
+
 def init_distributed_device(args):
-    # Distributed training = training on more than one GPU.
-    # Works in both single and multi-node scenarios.
     args.distributed = False
     args.world_size = 1
     args.rank = 0  # global rank
     args.local_rank = 0
 
-    # TBD, support horovod?
-    # if args.horovod:
-    #     assert hvd is not None, "Horovod is not installed"
-    #     hvd.init()
-    #     args.local_rank = int(hvd.local_rank())
-    #     args.rank = hvd.rank()
-    #     args.world_size = hvd.size()
-    #     args.distributed = True
-    #     os.environ['LOCAL_RANK'] = str(args.local_rank)
-    #     os.environ['RANK'] = str(args.rank)
-    #     os.environ['WORLD_SIZE'] = str(args.world_size)
-    dist_backend = getattr(args, 'dist_backend', 'nccl')
+    # Choose the appropriate backend. 'nccl' for CUDA, 'gloo' for CPU.
+    use_cuda = torch.cuda.is_available()
+    dist_backend = 'nccl' if use_cuda else 'gloo'
+    
     dist_url = getattr(args, 'dist_url', 'env://')
     if is_distributed_env():
         if 'SLURM_PROCID' in os.environ:
@@ -123,7 +172,8 @@ def init_distributed_device(args):
             args.rank = torch.distributed.get_rank()
         args.distributed = True
 
-    if torch.cuda.is_available():
+    # Determine device type
+    if use_cuda:
         if args.distributed:
             device = 'cuda:%d' % args.local_rank
         else:
@@ -135,3 +185,4 @@ def init_distributed_device(args):
     args.device = device
     device = torch.device(device)
     return device
+
